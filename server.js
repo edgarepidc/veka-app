@@ -153,7 +153,85 @@ app.get('/api/transactions/:unit', authMiddleware, async (req, res) => {
   const result = await pool.query('SELECT * FROM transactions WHERE unit = $1 ORDER BY date DESC', [req.params.unit]);
   res.json(result.rows);
 });
+// ─── FEED ENDPOINTS ─────────────────────────────────────────────────────────
 
+// Obtener todos los posts
+app.get('/api/feed', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.*, 
+        COALESCE(json_agg(DISTINCT r.emoji) FILTER (WHERE r.emoji IS NOT NULL), '[]') as reactions,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', c.id, 'author', c.author, 'content', c.content, 'created_at', c.created_at)) FILTER (WHERE c.id IS NOT NULL), '[]') as comments
+      FROM feed_posts p
+      LEFT JOIN post_reactions r ON p.id = r.post_id
+      LEFT JOIN post_comments c ON p.id = c.post_id
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching feed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Crear un nuevo post
+app.post('/api/feed', authMiddleware, async (req, res) => {
+  const { content, type } = req.body;
+  const unit = req.user.unit || '304';
+  const resident = await pool.query('SELECT name FROM residents WHERE unit = $1', [unit]);
+  const author = resident.rows[0]?.name || 'Residente';
+  const avatar = author.split(' ').map(w => w[0]).join('').slice(0, 2);
+  
+  try {
+    const result = await pool.query(
+      'INSERT INTO feed_posts (unit, author, avatar, content, type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [unit, author, avatar, content, type || 'post']
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating post:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Agregar reacción a un post
+app.post('/api/feed/:postId/react', authMiddleware, async (req, res) => {
+  const { postId } = req.params;
+  const { emoji } = req.body;
+  const unit = req.user.unit || '304';
+  
+  try {
+    await pool.query(
+      'INSERT INTO post_reactions (post_id, unit, emoji) VALUES ($1, $2, $3) ON CONFLICT (post_id, unit) DO UPDATE SET emoji = $3',
+      [postId, unit, emoji]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error adding reaction:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Agregar comentario a un post
+app.post('/api/feed/:postId/comment', authMiddleware, async (req, res) => {
+  const { postId } = req.params;
+  const { content } = req.body;
+  const unit = req.user.unit || '304';
+  const resident = await pool.query('SELECT name FROM residents WHERE unit = $1', [unit]);
+  const author = resident.rows[0]?.name || 'Residente';
+  
+  try {
+    const result = await pool.query(
+      'INSERT INTO post_comments (post_id, unit, author, content) VALUES ($1, $2, $3, $4) RETURNING *',
+      [postId, unit, author, content]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding comment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Veka backend corriendo en puerto ${PORT}`);
   console.log(`✅ Health check: /api/health`);
