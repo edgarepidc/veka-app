@@ -155,7 +155,7 @@ app.get('/api/transactions/:unit', authMiddleware, async (req, res) => {
 });
 // ─── FEED ENDPOINTS ─────────────────────────────────────────────────────────
 
-// Obtener todos los posts
+// Obtener todos los posts del feed
 app.get('/api/feed', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -179,13 +179,16 @@ app.get('/api/feed', authMiddleware, async (req, res) => {
 app.post('/api/feed', authMiddleware, async (req, res) => {
   const { content, type } = req.body;
   const unit = req.user.unit || '304';
-  const resident = await pool.query('SELECT name FROM residents WHERE unit = $1', [unit]);
-  const author = resident.rows[0]?.name || 'Residente';
-  const avatar = author.split(' ').map(w => w[0]).join('').slice(0, 2);
   
   try {
+    // Obtener datos del residente
+    const residentResult = await pool.query('SELECT name FROM residents WHERE unit = $1', [unit]);
+    const author = residentResult.rows[0]?.name || 'Residente';
+    const avatar = author.split(' ').map(w => w[0]).join('').slice(0, 2);
+    
     const result = await pool.query(
-      'INSERT INTO feed_posts (unit, author, avatar, content, type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      `INSERT INTO feed_posts (unit, author, avatar, content, type) 
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [unit, author, avatar, content, type || 'post']
     );
     res.json(result.rows[0]);
@@ -203,7 +206,9 @@ app.post('/api/feed/:postId/react', authMiddleware, async (req, res) => {
   
   try {
     await pool.query(
-      'INSERT INTO post_reactions (post_id, unit, emoji) VALUES ($1, $2, $3) ON CONFLICT (post_id, unit) DO UPDATE SET emoji = $3',
+      `INSERT INTO post_reactions (post_id, unit, emoji) 
+       VALUES ($1, $2, $3) 
+       ON CONFLICT (post_id, unit) DO UPDATE SET emoji = $3`,
       [postId, unit, emoji]
     );
     res.json({ success: true });
@@ -218,12 +223,14 @@ app.post('/api/feed/:postId/comment', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const { content } = req.body;
   const unit = req.user.unit || '304';
-  const resident = await pool.query('SELECT name FROM residents WHERE unit = $1', [unit]);
-  const author = resident.rows[0]?.name || 'Residente';
   
   try {
+    const residentResult = await pool.query('SELECT name FROM residents WHERE unit = $1', [unit]);
+    const author = residentResult.rows[0]?.name || 'Residente';
+    
     const result = await pool.query(
-      'INSERT INTO post_comments (post_id, unit, author, content) VALUES ($1, $2, $3, $4) RETURNING *',
+      `INSERT INTO post_comments (post_id, unit, author, content) 
+       VALUES ($1, $2, $3, $4) RETURNING *`,
       [postId, unit, author, content]
     );
     res.json(result.rows[0]);
