@@ -9,93 +9,125 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const SECRET = process.env.SECRET || 'veka-super-secret-key-2026';
 
+// CORS configuración completa para Netlify
+const allowedOrigins = [
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+  'https://veka-app-viva.netlify.app',
+  'https://*.netlify.app'
+];
+
 app.use(cors({
-  origin: ['http://localhost:5500', 'http://127.0.0.1:5500', 'https://veka-app-viva.netlify.app', 'https://*.netlify.app'],
-  credentials: true
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.some(o => origin.includes('netlify.app') || origin === o)) {
+      return callback(null, true);
+    }
+    console.log('Origen bloqueado por CORS:', origin);
+    callback(null, true); // Permitir igualmente para debug
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json());
 
-// Conexión a PostgreSQL (Railway)
+// Conexión a PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Crear tablas automáticamente
+// Crear tablas
 async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS residents (
-      unit TEXT PRIMARY KEY,
-      name TEXT,
-      cluster TEXT,
-      email TEXT,
-      phone TEXT,
-      status TEXT DEFAULT 'current'
-    )
-  `);
-  
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      email TEXT UNIQUE,
-      password TEXT,
-      role TEXT DEFAULT 'admin'
-    )
-  `);
-  
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS transactions (
-      id SERIAL PRIMARY KEY,
-      unit TEXT,
-      concept TEXT,
-      amount REAL,
-      date TEXT,
-      status TEXT DEFAULT 'pending'
-    )
-  `);
-  
-  // Insertar datos de ejemplo
-  const adminPassword = bcrypt.hashSync('admin123', 10);
-  await pool.query(`INSERT INTO users (email, password, role) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING`, 
-    ['admin@veka.com', adminPassword, 'admin']);
-  
-  const residents = [
-    ['304', 'María Fernández', 'Torre A', 'maria@veka.com', '+52 55 1234 5678', 'current'],
-    ['201', 'Ana Pérez', 'Torre A', 'ana@veka.com', '+52 55 5555 6666', 'current'],
-    ['401', 'Jorge Ruiz', 'Torre B', 'jorge@veka.com', '+52 55 7777 8888', 'overdue'],
-  ];
-  
-  for (const r of residents) {
-    await pool.query(`INSERT INTO residents (unit, name, cluster, email, phone, status) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (unit) DO NOTHING`, r);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS residents (
+        unit TEXT PRIMARY KEY,
+        name TEXT,
+        cluster TEXT,
+        email TEXT,
+        phone TEXT,
+        status TEXT DEFAULT 'current'
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE,
+        password TEXT,
+        role TEXT DEFAULT 'admin'
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        unit TEXT,
+        concept TEXT,
+        amount REAL,
+        date TEXT,
+        status TEXT DEFAULT 'pending'
+      )
+    `);
+    
+    const adminPassword = bcrypt.hashSync('admin123', 10);
+    await pool.query(`INSERT INTO users (email, password, role) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING`, 
+      ['admin@veka.com', adminPassword, 'admin']);
+    
+    const residents = [
+      ['304', 'María Fernández', 'Torre A', 'maria@veka.com', '+52 55 1234 5678', 'current'],
+      ['201', 'Ana Pérez', 'Torre A', 'ana@veka.com', '+52 55 5555 6666', 'current'],
+      ['401', 'Jorge Ruiz', 'Torre B', 'jorge@veka.com', '+52 55 7777 8888', 'overdue'],
+    ];
+    
+    for (const r of residents) {
+      await pool.query(`INSERT INTO residents (unit, name, cluster, email, phone, status) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (unit) DO NOTHING`, r);
+    }
+    
+    console.log('✅ Base de datos PostgreSQL inicializada');
+  } catch (error) {
+    console.error('Error en initDB:', error);
   }
-  
-  console.log('✅ Base de datos PostgreSQL inicializada');
 }
 
 initDB();
 
+// Ruta de prueba
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
 // Login
 app.post('/api/login', async (req, res) => {
+  console.log('Login request recibida:', req.body);
   const { email, password, unit } = req.body;
   
-  if (email && password) {
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (result.rows.length === 0) return res.status(401).json({ error: 'Credenciales inválidas' });
-    const user = result.rows[0];
-    if (bcrypt.compareSync(password, user.password)) {
-      const token = jwt.sign({ email: user.email, role: 'admin' }, SECRET, { expiresIn: '24h' });
-      res.json({ token, role: 'admin', name: 'Administrador' });
+  try {
+    if (email && password) {
+      const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+      if (result.rows.length === 0) return res.status(401).json({ error: 'Credenciales inválidas' });
+      const user = result.rows[0];
+      if (bcrypt.compareSync(password, user.password)) {
+        const token = jwt.sign({ email: user.email, role: 'admin' }, SECRET, { expiresIn: '24h' });
+        res.json({ token, role: 'admin', name: 'Administrador' });
+      } else {
+        res.status(401).json({ error: 'Contraseña incorrecta' });
+      }
+    } else if (unit) {
+      const result = await pool.query('SELECT * FROM residents WHERE unit = $1', [unit]);
+      if (result.rows.length === 0) return res.status(401).json({ error: 'Departamento no encontrado' });
+      const resident = result.rows[0];
+      const token = jwt.sign({ unit: resident.unit, role: 'resident' }, SECRET, { expiresIn: '24h' });
+      res.json({ token, role: 'resident', resident });
     } else {
-      res.status(401).json({ error: 'Contraseña incorrecta' });
+      res.status(400).json({ error: 'Faltan datos' });
     }
-  } else if (unit) {
-    const result = await pool.query('SELECT * FROM residents WHERE unit = $1', [unit]);
-    if (result.rows.length === 0) return res.status(401).json({ error: 'Departamento no encontrado' });
-    const resident = result.rows[0];
-    const token = jwt.sign({ unit: resident.unit, role: 'resident' }, SECRET, { expiresIn: '24h' });
-    res.json({ token, role: 'resident', resident });
-  } else {
-    res.status(400).json({ error: 'Faltan datos' });
+  } catch (error) {
+    console.error('Error en login:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -122,6 +154,6 @@ app.get('/api/transactions/:unit', authMiddleware, async (req, res) => {
   res.json(result.rows);
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Veka backend corriendo en http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Veka backend corriendo en http://0.0.0.0:${PORT}`);
 });
