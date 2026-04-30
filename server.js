@@ -155,5 +155,6 @@ app.get('/api/transactions/:unit', authMiddleware, async (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Veka backend corriendo en http://0.0.0.0:${PORT}`);
+  console.log(`✅ Veka backend corriendo en puerto ${PORT}`);
+  console.log(`✅ Health check: /api/health`);
 });
